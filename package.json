@@ -1,0 +1,37 @@
+{
+  "name": "@tuzelko/opencode-proprioception",
+  "version": "0.1.0",
+  "description": "The agent's sense of its own context window: fill reports inside tool results.",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "context",
+    "tokens",
+    "compaction",
+    "agent"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TuzelKO/opencode-proprioception.git"
+  },
+  "homepage": "https://github.com/TuzelKO/opencode-proprioception#readme",
+  "bugs": {
+    "url": "https://github.com/TuzelKO/opencode-proprioception/issues"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.2.5"
+  }
+}
