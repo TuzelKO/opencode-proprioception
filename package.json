@@ -1,6 +1,6 @@
 {
   "name": "@tuzelko/opencode-proprioception",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The agent's sense of its own context window: fill reports inside tool results.",
   "keywords": [
     "opencode",
@@ -15,6 +15,9 @@
     "access": "public"
   },
   "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
   "exports": {
     ".": "./index.ts"
   },
@@ -33,5 +36,8 @@
   },
   "dependencies": {
     "@opencode/plugin": "^2.2.5"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }

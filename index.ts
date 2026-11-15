@@ -16,13 +16,20 @@ import { Plugin } from "@opencode/plugin"
 //
 // Per session state: parallel sessions and subagents each keep their own
 // buckets. Armoured throughout: on any failure the hook stays silent.
-const asArray = (v: unknown): any[] =>
-  Array.isArray(v) ? v : Array.isArray((v as any)?.data) ? (v as any).data : []
+type TextPart = { type: "text"; text: string }
+
+// Some calls answer with a bare array, others with a `{ data }` envelope;
+// both shapes are accepted so a wrapped answer degrades to silence, not to
+// a crash.
+const asArray = <T>(v: readonly T[] | { readonly data: readonly T[] } | null): readonly T[] => {
+  if (v === null) return []
+  return "data" in v ? v.data : v
+}
 
 export default Plugin.define({
   id: "proprioception",
   async setup(ctx) {
-    const raw = ctx.options.step
+    const raw = ctx.options?.step
     const step =
       typeof raw === "number" && raw > 0 && raw <= 1 ? raw : 0.05
 
@@ -31,18 +38,18 @@ export default Plugin.define({
     // sessionID -> bucket of the last DELIVERED report
     const delivered = new Map<string, number>()
 
-    await ctx.session.hook("context", async (event: any) => {
+    await ctx.session.hook("context", async (event) => {
       try {
-        const sessionID: string | undefined = event.sessionID
-        const model: { providerID?: string; id?: string } | undefined = event.model
+        const sessionID = event.sessionID
+        const model = event.model
         if (!sessionID || !model?.providerID || !model?.id) return
 
         // The window: from the model's own declared limit.
         const models = asArray(await ctx.model.list().catch(() => null))
-        const info: any = models.find(
-          (m) => m?.providerID === model.providerID && (m?.id ?? m?.modelID) === model.id,
+        const info = models.find(
+          (m) => m.providerID === model.providerID && (m.id ?? m.modelID) === model.id,
         )
-        const window: number | undefined = info?.limit?.context
+        const window = info?.limit.context
         if (!window || window <= 0) return
 
         // The fill: what the last completed turn saw plus what it produced —
@@ -50,14 +57,15 @@ export default Plugin.define({
         const messages = asArray(await ctx.session.context({ sessionID }).catch(() => null))
         let fill = 0
         for (let i = messages.length - 1; i >= 0; i--) {
-          const t = messages[i]?.tokens ?? messages[i]?.info?.tokens
+          const message = messages[i]
+          const t = message.type === "assistant" ? message.tokens : undefined
           if (t) {
             fill =
               (t.input || 0) +
               (t.reasoning || 0) +
               (t.output || 0) +
-              (t.cache?.read || 0) +
-              (t.cache?.write || 0)
+              (t.cache.read || 0) +
+              (t.cache.write || 0)
             break
           }
         }
@@ -69,11 +77,10 @@ export default Plugin.define({
       }
     })
 
-    await ctx.tool.hook("execute.after", async (event: any) => {
+    await ctx.tool.hook("execute.after", async (event) => {
       try {
         if (event.status !== "completed") return
-        const sessionID: string | undefined =
-          event.sessionID ?? event.context?.sessionID
+        const sessionID = event.sessionID
         if (!sessionID) return
 
         const pct = latest.get(sessionID)
@@ -87,27 +94,31 @@ export default Plugin.define({
         // Re-derive the exact numbers for the report line.
         const pctWhole = Math.round(pct)
         const line = `[proprioception] context fill: ${pctWhole}% of the window (step ${Math.round(step * 100)}pp, last crossing).`
+        const report: TextPart = { type: "text", text: line }
 
-        // Deliver through `content` — the only field the server persists:
-        // it builds the result as to(content, output), where `output` is
-        // read ONLY when `content` is empty, and it never is.
+        // The server builds the result from `content`, falling back to
+        // `output` only when `content` is absent or empty; a report must
+        // therefore never replace a bare `output` — it is folded in front
+        // of it instead.
         const result = event.result
-        if (!result || typeof result === "string") {
-          event.result = {
-            content: [{ type: "text", text: String(result ?? "") + "\n" + line }],
-          }
+        const content = result.content
+        if (content === undefined || (Array.isArray(content) && content.length === 0)) {
+          const output = result.output
+          const parts: TextPart[] =
+            output === undefined
+              ? [report]
+              : [
+                  {
+                    type: "text",
+                    text: typeof output === "string" ? output : JSON.stringify(output),
+                  },
+                  report,
+                ]
+          event.result = { ...result, content: parts }
+        } else if (typeof content === "string") {
+          event.result = { ...result, content: content + "\n" + line }
         } else {
-          const content = (result as any).content
-          if (typeof content === "string") {
-            event.result = { ...result, content: content + "\n" + line }
-          } else if (Array.isArray(content)) {
-            event.result = {
-              ...result,
-              content: [...content, { type: "text", text: line }],
-            }
-          } else {
-            event.result = { ...result, content: [{ type: "text", text: line }] }
-          }
+          event.result = { ...result, content: [...content, report] }
         }
       } catch {
         // Never break a tool result over self-knowledge.
