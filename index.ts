@@ -37,6 +37,8 @@ export default Plugin.define({
     const latest = new Map<string, number>()
     // sessionID -> bucket of the last DELIVERED report
     const delivered = new Map<string, number>()
+    // "providerID/modelID" -> declared context window
+    const windows = new Map<string, number>()
 
     await ctx.session.hook("context", async (event) => {
       try {
@@ -44,13 +46,20 @@ export default Plugin.define({
         const model = event.model
         if (!sessionID || !model?.providerID || !model?.id) return
 
-        // The window: from the model's own declared limit.
-        const models = asArray(await ctx.model.list().catch(() => null))
-        const info = models.find(
-          (m) => m.providerID === model.providerID && (m.id ?? m.modelID) === model.id,
-        )
-        const window = info?.limit.context
-        if (!window || window <= 0) return
+        // The window: from the model's own declared limit. The catalog costs a
+        // full list per call and the limit is static for the process, so it is
+        // fetched once per model, not once per request.
+        const key = `${model.providerID}/${model.id}`
+        let window = windows.get(key)
+        if (window === undefined) {
+          const models = asArray(await ctx.model.list().catch(() => null))
+          const info = models.find(
+            (m) => m.providerID === model.providerID && (m.id ?? m.modelID) === model.id,
+          )
+          window = info?.limit.context
+          if (!window || window <= 0) return
+          windows.set(key, window)
+        }
 
         // The fill: what the last completed turn saw plus what it produced —
         // the context as this request will receive it.
