@@ -1,6 +1,6 @@
 {
   "name": "@tuzelko/opencode-proprioception",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "The agent's sense of its own context window: fill reports inside tool results.",
   "keywords": [
     "opencode",

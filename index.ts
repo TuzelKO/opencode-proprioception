@@ -18,6 +18,22 @@ import { Plugin } from "@opencode/plugin"
 // buckets. Armoured throughout: on any failure the hook stays silent.
 type TextPart = { type: "text"; text: string }
 
+type Tokens = {
+  input: number
+  output: number
+  reasoning: number
+  cache: { read: number; write: number }
+}
+
+// What the last completed turn saw plus what it produced — the context as the
+// next request will receive it.
+const fillOf = (t: Tokens) =>
+  (t.input || 0) +
+  (t.reasoning || 0) +
+  (t.output || 0) +
+  (t.cache.read || 0) +
+  (t.cache.write || 0)
+
 // Some calls answer with a bare array, others with a `{ data }` envelope;
 // both shapes are accepted so a wrapped answer degrades to silence, not to
 // a crash.
@@ -39,6 +55,34 @@ export default Plugin.define({
     const delivered = new Map<string, number>()
     // "providerID/modelID" -> declared context window
     const windows = new Map<string, number>()
+    // sessionID -> fill of the last completed step, pushed by the event bus
+    const fills = new Map<string, number>()
+    // sessionID -> its transcript was read once to seed `fills`
+    const seeded = new Set<string>()
+
+    // The bus carries the step usage for free; reading the transcript on every
+    // request was the hot path. A dead feed only freezes the reported fill.
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({
+          types: ["session.step.ended", "session.deleted", "model.updated"],
+        })) {
+          if (event.type === "session.step.ended") {
+            fills.set(event.data.sessionID, fillOf(event.data.tokens))
+          } else if (event.type === "session.deleted") {
+            const sessionID = event.data.sessionID
+            fills.delete(sessionID)
+            seeded.delete(sessionID)
+            latest.delete(sessionID)
+            delivered.delete(sessionID)
+          } else {
+            windows.clear()
+          }
+        }
+      } catch {
+        // Never take the plugin down over a lost feed.
+      }
+    })()
 
     await ctx.session.hook("context", async (event) => {
       try {
@@ -61,22 +105,25 @@ export default Plugin.define({
           windows.set(key, window)
         }
 
-        // The fill: what the last completed turn saw plus what it produced —
-        // the context as this request will receive it.
-        const messages = asArray(await ctx.session.context({ sessionID }).catch(() => null))
-        let fill = 0
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const message = messages[i]
-          const t = message.type === "assistant" ? message.tokens : undefined
-          if (t) {
-            fill =
-              (t.input || 0) +
-              (t.reasoning || 0) +
-              (t.output || 0) +
-              (t.cache.read || 0) +
-              (t.cache.write || 0)
-            break
+        // The fill comes from the last completed step. A session met for the
+        // first time after a plugin load has no pushed value yet, so its
+        // transcript is read once — a fresh session with no assistant message
+        // must not pay that read on every request.
+        let fill = fills.get(sessionID)
+        if (fill === undefined) {
+          if (seeded.has(sessionID)) return
+          seeded.add(sessionID)
+          const messages = asArray(await ctx.session.context({ sessionID }).catch(() => null))
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const message = messages[i]
+            const t = message.type === "assistant" ? message.tokens : undefined
+            if (t) {
+              fill = fillOf(t)
+              break
+            }
           }
+          if (fill === undefined || fill <= 0) return
+          fills.set(sessionID, fill)
         }
         if (fill <= 0) return
 
